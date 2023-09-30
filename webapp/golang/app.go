@@ -186,42 +186,64 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	var posts []Post
 
+	// postIdsだけの配列
+	postIds := make([]int, len(results))
+	postUserIds := make([]int, len(results))
+	for _, v := range results {
+		postIds = append(postIds, v.ID)
+		postUserIds = append(postUserIds, v.UserID)
+	}
+
+	// 全postのコメント一覧取得しておく
+	sql, params, err := sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `created_at` DESC ", postIds)
+	if err != nil {
+		return nil, err
+	}
+	var postComments []Comment
+	if err := db.Select(&postComments, sql, params...); err != nil {
+		return nil, err
+	}
+
+	// postIdごとのcomments
+	postIdToComments := map[int][]Comment{}
+	for _, v := range postComments {
+		curComments := postIdToComments[v.PostID]
+		curComments = append(curComments, v)
+		postIdToComments[v.PostID] = curComments
+	}
+
+	// userIdsだけの配列
+	userIds := make([]int, len(postComments)+len(postUserIds))
+	for _, v := range postComments {
+		userIds = append(userIds, v.UserID)
+	}
+	userIds = append(userIds, postUserIds...)
+	// userIdごとのuser
+	userIdToUser := map[int]User{}
+	if len(userIds) > 0 {
+		// user取得
+		sql2, params2, err := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", userIds)
+		if err != nil {
+			return nil, err
+		}
+		var usrs []User
+		if err := db.Select(&usrs, sql2, params2...); err != nil {
+			return nil, err
+		}
+		for _, v := range usrs {
+			userIdToUser[v.ID] = v
+		}
+	}
+
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		//		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
-		query := "SELECT id, post_id, user_id, comment, c.created_at,  u.account_name, u.passhash, u.authority, u.del_flg FROM `comments` c INNER JOIN `users` u ON c.user_id = u.id WHERE `post_id` = ? AND u.del_flg=0  ORDER BY `created_at` ASC"
-
-		if !allComments {
-			query += " LIMIT 3"
-		}
-		var commentsU []CommentUser
-		var comments []Comment
-		err = db.Select(&commentsU, query, p.ID)
-		if err != nil {
-			return nil, err
+		comments := postIdToComments[p.ID]
+		p.CommentCount = len(comments)
+		if !allComments && len(comments) > 3 {
+			comments = comments[:3]
 		}
 
 		for i := 0; i < len(comments); i++ {
-			comments[i].User.ID = commentsU[i].UserID
-			comments[i].User.AccountName = commentsU[i].AccountName
-			comments[i].User.Passhash = commentsU[i].Passhash
-			comments[i].User.Authority = commentsU[i].Authority
-			comments[i].User.CreatedAt = commentsU[i].CreatedAt
-
-			comments[i].ID = commentsU[i].ID
-			comments[i].PostID = commentsU[i].PostID
-			comments[i].UserID = commentsU[i].UserID
-			comments[i].Comment = commentsU[i].Comment
-			comments[i].CreatedAt = commentsU[i].CreatedAt
-
-			//err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			//if err != nil {
-			//	return nil, err
-			//}
+			comments[i].User = userIdToUser[comments[i].UserID]
 		}
 
 		// reverse
@@ -230,20 +252,10 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 		}
 
 		p.Comments = comments
-
-		err = db.Get(&p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
-		if err != nil {
-			return nil, err
-		}
-
+		p.User = userIdToUser[p.UserID]
 		p.CSRFToken = csrfToken
 
-		//if p.User.DelFlg == 0 {
 		posts = append(posts, p)
-		//}
-		if len(posts) >= postsPerPage {
-			break
-		}
 	}
 
 	return posts, nil
