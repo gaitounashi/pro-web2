@@ -66,6 +66,18 @@ type Comment struct {
 	User      User
 }
 
+type CommentUser struct {
+	ID          int       `db:"id"`
+	PostID      int       `db:"post_id"`
+	UserID      int       `db:"user_id"`
+	Comment     string    `db:"comment"`
+	CreatedAt   time.Time `db:"created_at"`
+	AccountName string    `db:"account_name"`
+	Passhash    string    `db:"passhash"`
+	Authority   int       `db:"authority"`
+	DelFlg      int       `db:"del_flg"`
+}
+
 func init() {
 	memdAddr := os.Getenv("ISUCONP_MEMCACHED_ADDRESS")
 	if memdAddr == "" {
@@ -180,21 +192,36 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 			return nil, err
 		}
 
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+		//		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+		query := "SELECT id, post_id, user_id, comment, c.created_at,  u.account_name, u.passhash, u.authority, u.del_flg FROM `comments` c INNER JOIN `users` u ON c.user_id = u.id WHERE `post_id` = ? AND u.del_flg=0  ORDER BY `created_at` ASC"
+
 		if !allComments {
 			query += " LIMIT 3"
 		}
+		var commentsU []CommentUser
 		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
+		err = db.Select(&commentsU, query, p.ID)
 		if err != nil {
 			return nil, err
 		}
 
 		for i := 0; i < len(comments); i++ {
-			err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
+			comments[i].User.ID = commentsU[i].UserID
+			comments[i].User.AccountName = commentsU[i].AccountName
+			comments[i].User.Passhash = commentsU[i].Passhash
+			comments[i].User.Authority = commentsU[i].Authority
+			comments[i].User.CreatedAt = commentsU[i].CreatedAt
+
+			comments[i].ID = commentsU[i].ID
+			comments[i].PostID = commentsU[i].PostID
+			comments[i].UserID = commentsU[i].UserID
+			comments[i].Comment = commentsU[i].Comment
+			comments[i].CreatedAt = commentsU[i].CreatedAt
+
+			//err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
+			//if err != nil {
+			//	return nil, err
+			//}
 		}
 
 		// reverse
@@ -211,9 +238,9 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 
 		p.CSRFToken = csrfToken
 
-		if p.User.DelFlg == 0 {
-			posts = append(posts, p)
-		}
+		//if p.User.DelFlg == 0 {
+		posts = append(posts, p)
+		//}
 		if len(posts) >= postsPerPage {
 			break
 		}
